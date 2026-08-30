@@ -1,0 +1,20 @@
+const int LED = 13;
+const int PULSADOR = 8;
+
+void setup()
+{
+  pinMode(LED, OUTPUT);
+  pinMode(PULSADOR, INPUT_PULLUP);
+}
+
+void loop()
+{
+  if (digitalRead(PULSADOR) == LOW) // botón presionado
+  {
+    digitalWrite(LED, HIGH);
+  }
+  else // botón suelto
+  {
+    digitalWrite(LED, LOW);
+  }
+}
