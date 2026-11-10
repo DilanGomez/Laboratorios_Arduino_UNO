@@ -1,0 +1,234 @@
+#include <Wire.h>
+#include <Servo.h>
+#include <SparkFun_APDS9960.h>
+
+// ============================ SENSOR Y LUZ ============================
+SparkFun_APDS9960 apds = SparkFun_APDS9960();  // creamos el sensor
+uint16_t luzTotal = 0;  // luz total que llega al sensor
+uint16_t luzRoja = 0;   // luz roja
+uint16_t luzVerde = 0;  // luz verde
+uint16_t luzAzul = 0;   // luz azul
+
+const int ledR = 3;  // pin del LED rojo del HW-479
+const int ledG = 4;  // pin del LED verde
+const int ledB = 5;  // pin del LED azul
+
+// ============================ SERVOS ============================
+Servo Cintura;  // servo de la cintura (pin 6)
+Servo Hombro;   // servo del hombro (pin 9)
+Servo Codo;     // servo del codo (pin 10)
+Servo Pinzas;   // servo de las pinzas (pin 11)
+
+// Sentidos de giro (comprobados con la prueba de los servos)
+const int FRENTE = 1;      // hombro hacia adelante
+const int ATRAS = -1;      // hombro hacia atrás
+const int IZQUIERDA = 1;   // cintura a la izquierda
+const int DERECHA = -1;    // cintura a la derecha
+const int SUBE = 1;        // codo hacia arriba
+const int BAJA = -1;       // codo hacia abajo
+const int CERRAR = 1;      // pinzas se cierran
+const int ABRIR = -1;      // pinzas se abren
+
+int parar = 90;    // valor con el que un servo de 360 se queda quieto
+int vel = 40;      // velocidad de giro (qué tanto nos alejamos de 90)
+int pausa = 1000;  // pausa entre un movimiento y otro
+
+// ####################### CALIBRACIÓN DEL SENSOR #######################
+uint16_t luzMinima = 100;  // si la luz total es menor, no hay pieza frente al sensor
+float limiteRojo = 0.6;    // verde/rojo menor que esto = ROJO
+float limiteVerde = 1.5;   // verde/rojo mayor que esto = VERDE (entre los dos = AMARILLO)
+
+// ############ CALIBRACIÓN: RECOGER LA PIEZA (igual para todos los colores) ############
+int recogerCodoBaja1 = 300;     // paso 1: codo baja
+int recogerHombroFrente = 700;  // paso 2: hombro va al frente hasta la pieza
+                                // paso 3: codo baja otro poquito (va en cada color)
+int pinzasCierra = 350;         // paso 4: tiempo que se cierran las pinzas
+int apriete = 10;               //         fuerza con que sostienen la pieza
+int recogerHombroAtras = 1400;  // paso 5: hombro va todo lo que pueda hacia atrás
+int recogerCodoSube = 500;      // paso 6: codo sube mucho para levantar el bloque
+
+// ############ CALIBRACIÓN DE CADA COLOR ############
+// Paso 3:  codo baja otro poquito para recoger (RecogerCodoBaja2)
+// Paso 7:  cintura gira a la DERECHA            (CinturaIda)
+// Paso 8:  codo baja hasta la base              (EntregaCodoBaja)
+// Paso 9:  pinzas se abren                      (PinzasAbre)
+// Paso 10: hombro vuelve hacia ATRÁS            (RegresoHombro)
+// Paso 11: codo sube a su posición inicial      (RegresoCodoSube)
+// Paso 12: cintura vuelve a la IZQUIERDA        (CinturaRegreso)
+
+// ROJO
+int rojoRecogerCodoBaja2 = 100;
+int rojoCinturaIda = 350;
+int rojoEntregaCodoBaja = 17;
+int rojoPinzasAbre = 210;
+int rojoRegresoHombro = 500;
+int rojoRegresoCodoSube = 720;
+int rojoCinturaRegreso = 350;
+
+// AMARILLO
+int amarilloRecogerCodoBaja2 = 100;
+int amarilloCinturaIda = 600;
+int amarilloEntregaCodoBaja = 117;
+int amarilloPinzasAbre = 210;
+int amarilloRegresoHombro = 583;
+int amarilloRegresoCodoSube = 820;
+int amarilloCinturaRegreso = 580;
+
+// VERDE
+int verdeRecogerCodoBaja2 = 80;
+int verdeCinturaIda = 750;
+int verdeEntregaCodoBaja = 117;
+int verdePinzasAbre = 210;
+int verdeRegresoHombro = 483;
+int verdeRegresoCodoSube = 920;
+int verdeCinturaRegreso = 770;
+// ######################################################################
+
+void setup() {
+  Serial.begin(9600);  // para ver los valores en el monitor serie
+
+  // Encender el LED en blanco (rojo + verde + azul juntos)
+  pinMode(ledR, OUTPUT);
+  pinMode(ledG, OUTPUT);
+  pinMode(ledB, OUTPUT);
+  digitalWrite(ledR, HIGH);
+  digitalWrite(ledG, HIGH);
+  digitalWrite(ledB, HIGH);
+
+  // Conectar los servos y dejarlos quietos
+  Cintura.attach(6);
+  Hombro.attach(9);
+  Codo.attach(10);
+  Pinzas.attach(11);
+  Cintura.write(parar);
+  Hombro.write(parar);
+  Codo.write(parar);
+  Pinzas.write(parar);
+
+  // Iniciar el sensor
+  if (apds.init()) {
+    Serial.println(F("Sensor iniciado correctamente"));
+  } else {
+    Serial.println(F("Error al iniciar el sensor, revisa las conexiones"));
+  }
+  if (apds.enableLightSensor(false)) {
+    Serial.println(F("Medicion de color activada"));
+  } else {
+    Serial.println(F("Error al activar la medicion de color"));
+  }
+
+  delay(500);  // espera a que el sensor termine de prepararse
+}
+
+void loop() {
+  String color = leerColor();  // primera lectura
+
+  if (color == "ROJO" || color == "AMARILLO" || color == "VERDE") {
+    delay(300);                         // espera un momento
+    String confirmacion = leerColor();  // segunda lectura
+
+    if (confirmacion == color) {  // solo se mueve si las dos lecturas coinciden
+      Serial.print("Llevando pieza ");
+      Serial.println(color);
+
+      if (color == "ROJO") {
+        llevarPieza(rojoRecogerCodoBaja2, rojoCinturaIda, rojoEntregaCodoBaja, rojoPinzasAbre,
+                    rojoRegresoHombro, rojoRegresoCodoSube, rojoCinturaRegreso);
+      } else if (color == "AMARILLO") {
+        llevarPieza(amarilloRecogerCodoBaja2, amarilloCinturaIda, amarilloEntregaCodoBaja, amarilloPinzasAbre,
+                    amarilloRegresoHombro, amarilloRegresoCodoSube, amarilloCinturaRegreso);
+      } else {
+        llevarPieza(verdeRecogerCodoBaja2, verdeCinturaIda, verdeEntregaCodoBaja, verdePinzasAbre,
+                    verdeRegresoHombro, verdeRegresoCodoSube, verdeCinturaRegreso);
+      }
+
+      delay(2000);  // tiempo para poner la siguiente pieza
+    }
+  }
+
+  delay(500);  // espera antes de la siguiente lectura
+}
+
+// ---------------- Lee el sensor y dice qué color ve ----------------
+String leerColor() {
+  if (!apds.readAmbientLight(luzTotal) ||
+      !apds.readRedLight(luzRoja) ||
+      !apds.readGreenLight(luzVerde) ||
+      !apds.readBlueLight(luzAzul)) {
+    Serial.println("Error leyendo el sensor");
+    return "ERROR";
+  }
+
+  // Relación verde/rojo: bajo = rojo, cerca de 1 = amarillo, alto = verde
+  float relacion;
+  if (luzRoja > 0) {
+    relacion = (float)luzVerde / luzRoja;
+  } else {
+    relacion = 99;  // sin nada de rojo se toma como muy verde (evita dividir entre cero)
+  }
+
+  String color;
+  if (luzTotal < luzMinima) {
+    color = "SIN PIEZA";
+  } else if (relacion < limiteRojo) {
+    color = "ROJO";
+  } else if (relacion > limiteVerde) {
+    color = "VERDE";
+  } else {
+    color = "AMARILLO";
+  }
+
+  // Mostrar los valores para poder calibrar
+  Serial.print("Luz: ");
+  Serial.print(luzTotal);
+  Serial.print("  Rojo: ");
+  Serial.print(luzRoja);
+  Serial.print("  Verde: ");
+  Serial.print(luzVerde);
+  Serial.print("  Azul: ");
+  Serial.print(luzAzul);
+  Serial.print("  Verde/Rojo: ");
+  Serial.print(relacion, 2);
+  Serial.print("  ->  ");
+  Serial.println(color);
+
+  return color;
+}
+
+// ---------------- Mueve un servo en un sentido durante un tiempo ----------------
+// El & hace que la función mueva el servo real y no una copia de él.
+void mover(Servo &servo, int sentido, int tiempo) {
+  if (tiempo <= 0) {
+    return;  // si el tiempo es 0 o negativo, este movimiento se salta
+  }
+  servo.write(parar + sentido * vel);  // gira en el sentido indicado (1 o -1)
+  delay(tiempo);                        // durante este tiempo
+  servo.write(parar);                   // se detiene
+  delay(pausa);                         // pausa antes del siguiente movimiento
+}
+
+// ---------------- Recoge la pieza, la entrega y vuelve al inicio ----------------
+void llevarPieza(int recogerCodoBaja2, int cinturaIda, int entregaCodoBaja, int pinzasAbre,
+                 int regresoHombro, int regresoCodoSube, int cinturaRegreso) {
+
+  // ===== Recoger la pieza =====
+  mover(Codo, BAJA, recogerCodoBaja1);          // 1. codo baja
+  mover(Hombro, FRENTE, recogerHombroFrente);   // 2. hombro va al frente
+  mover(Codo, BAJA, recogerCodoBaja2);          // 3. codo baja otro poquito (valor del color)
+  Pinzas.write(parar + CERRAR * vel);           // 4. pinzas se cierran
+  delay(pinzasCierra);
+  Pinzas.write(parar + CERRAR * apriete);       //    y se quedan apretando la pieza
+  delay(pausa);
+  mover(Hombro, ATRAS, recogerHombroAtras);     // 5. hombro va todo lo que pueda hacia atrás
+  mover(Codo, SUBE, recogerCodoSube);           // 6. codo sube mucho para levantar el bloque
+
+  // ===== Entregar la pieza =====
+  mover(Cintura, DERECHA, cinturaIda);          // 7. cintura gira a la derecha hasta el puesto
+  mover(Codo, BAJA, entregaCodoBaja);           // 8. codo baja hasta la base
+  mover(Pinzas, ABRIR, pinzasAbre);             // 9. pinzas se abren y sueltan la pieza
+
+  // ===== Regreso a la posición inicial =====
+  mover(Hombro, ATRAS, regresoHombro);          // 10. hombro vuelve hacia atrás a su posición inicial
+  mover(Codo, SUBE, regresoCodoSube);           // 11. codo sube a su posición inicial
+  mover(Cintura, IZQUIERDA, cinturaRegreso);    // 12. cintura vuelve al centro
+}
